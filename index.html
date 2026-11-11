@@ -1137,7 +1137,8 @@ async function vAttach0() {
   vData.removeEventListener("characteristicvaluechanged", onVData); vData.addEventListener("characteristicvaluechanged", onVData);
   await vCp.startNotifications(); await vData.startNotifications();
   vRateNom = 52;
-  if (vPlace === "Fuß") { const want = +$("vrate").value;
+  if (window.NACHTPLAYER) { vPlace = "Fuß"; try { nachtFix(); } catch (e) {} }
+  if (vPlace === "Fuß") { const want = window.NACHTPLAYER ? 208 : +$("vrate").value;
     vSdk = false; if (want > 52) { const sd = await vSend([0x02, 0x09]); vSdk = sd === 0; addEntry({ typ: "Sense", name: vSdk ? "SDK-Modus an (für höhere Raten)" : "SDK-Modus nicht möglich, Code " + sd, start: Date.now(), session: vRec }); }
     const st0 = await vGet(2); if (st0 && st0[0]) { addEntry({ typ: "Sense", name: `Sense kann Beschleunigung mit ${st0[0].join(", ")} Hz` + (st0[2] ? `, Bereich ${st0[2].join(", ")} g` : ""), start: Date.now(), session: vRec }); const ok = st0[0].filter(r => r <= want); vRateNom = ok.length ? Math.max(...ok) : 52; } else vRateNom = want; }
   let full = [0x02, 0x02, 0x00, 0x01, vRateNom & 255, vRateNom >> 8, 0x01, 0x01, 0x10, 0x00, 0x02, 0x01, 0x08, 0x00, 0x04, 0x01, 0x03];
@@ -3019,7 +3020,8 @@ $("clear").addEventListener("click", async () => {
     log = await readKind("log"); log.slice(-300).forEach(row);
     for (const k of Object.keys(counts)) counts[k] = await countKind(k);
   } catch (e) { $("mem").textContent = "Gerätespeicher nicht verfügbar: " + (e.message || e); }
-  try { for (const [k, id] of [["messplayer_nacht", "nacht"]]) { const v = localStorage.getItem(k); if (v !== null) $(id).checked = v === "1"; $(id).addEventListener("change", () => { try { localStorage.setItem(k, $(id).checked ? "1" : "0"); } catch (e) {} addEntry({ typ: "Daten", name: "Nachtmodus " + ($(id).checked ? "an" : "aus"), start: Date.now() }); }); } const vr = localStorage.getItem("messplayer_vrate"); if (vr) $("vrate").value = vr; $("vrate").addEventListener("change", () => { try { localStorage.setItem("messplayer_vrate", $("vrate").value); } catch (e) {} }); } catch (e) {}
+  try { for (const [k, id] of [["messplayer_nacht", "nacht"]]) { const v = localStorage.getItem(k); if (v !== null) $(id).checked = v === "1"; $(id).addEventListener("change", () => { try { localStorage.setItem(k, $(id).checked ? "1" : "0"); } catch (e) {} addEntry({ typ: "Daten", name: "Nachtmodus " + ($(id).checked ? "an" : "aus"), start: Date.now() }); }); } const vr = localStorage.getItem("messplayer_vrate"); if (vr && !window.NACHTPLAYER) $("vrate").value = vr; $("vrate").addEventListener("change", () => { try { localStorage.setItem("messplayer_vrate", $("vrate").value); } catch (e) {} }); } catch (e) {}
+  if (window.NACHTPLAYER) setTimeout(() => { try { nachtFix(); } catch (e) {} }, 0);
   try { const bd = localStorage.getItem('messplayer_bigdata'); if (bd !== null) $("bigdata").checked = bd === '1'; } catch (e) {}
   $("bigdata").addEventListener("change", () => { try { localStorage.setItem('messplayer_bigdata', $("bigdata").checked ? '1' : '0'); } catch (e) {} addEntry({ typ: "Daten", name: "BigData " + ($("bigdata").checked ? "an" : "aus"), start: Date.now() }); });
   memStatus(); showOrder(); renderReview(); listMics(); crashCheck(); masterShow(); testShow();
@@ -3050,7 +3052,7 @@ function nbProfile(Rc, t) {
 function nbBase(rr) { const i0 = NB.vor - 10, b = rr.slice(i0, i0 + 4); return b.reduce((a, c) => a + c, 0) / b.length; }  /* Schläge −10 bis −7 */
 
 function nightReport(raw, pid, startText) {
-  const { B, NE, A, F, G, steps, T0, TP } = raw;
+  const { B, A, F, G, steps, T0, TP } = raw; const NE = raw.NE || { ev: [] };
   const Rc = Float64Array.from(B.filter(b => b.ok).map(b => b.tt));
   const zu = NE.ev.filter(e => e.art === "Zuckung"), br = NE.ev.filter(e => e.art === "Brust");
   const sure = Float64Array.from(steps.filter(s => s.sicher).map(s => s.t));
