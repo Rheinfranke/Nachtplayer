@@ -991,8 +991,8 @@ $("reviewlist").addEventListener("click", e => {
 });
 function marker(label) { addEntry({ typ: "Marker", block: current ? current.block : "", name: label + (current ? " während " + current.name : ""), start: Date.now() }); }
 try {
-  navigator.mediaSession.setActionHandler("pause", () => { marker("Marker (Taste)"); setTimeout(() => { if (running && !mPause) tryPlay(); else keepTone(); }, 50); });
-  navigator.mediaSession.setActionHandler("play", () => { if (running && !mPause) tryPlay(); else keepTone(); });
+  navigator.mediaSession.setActionHandler("pause", () => { if (!anyActive()) { recStopped(); return; } marker("Marker (Taste)"); setTimeout(() => { if (running && !mPause) tryPlay(); else keepTone(); }, 50); });
+  navigator.mediaSession.setActionHandler("play", () => { if (!anyActive()) { recStopped(); return; } if (running && !mPause) tryPlay(); else keepTone(); });
   navigator.mediaSession.setActionHandler("nexttrack", () => { if ($("testab").checked && !test) testStart(); else musicToggle(); });
   navigator.mediaSession.setActionHandler("previoustrack", () => breathKey());
 } catch (e) {}
@@ -1413,6 +1413,7 @@ async function stopAll() {
   if (vWanted) $("vstop").click();
   addEntry({ typ: "Aufzeichnung", name: "Alles beendet (Hauptknopf)", start: Date.now() });
   await flush(); keepTone(); wlShow();
+  if (!anyActive()) { recWasActive = false; recStopped(); }
 }
 async function startAll() {
   addEntry({ typ: "Aufzeichnung", name: "Alles gestartet (Hauptknopf)", start: Date.now() });
@@ -1462,6 +1463,24 @@ function updateMeta() {
   } catch (e) {}
 }
 setInterval(updateMeta, 5000);
+let recWasActive = false;
+function recStopped() {
+  try { keep.pause(); keep.currentTime = 0; } catch (e) {}
+  try { if (!running) audio.pause(); } catch (e) {}
+  try { bCancel(); if (ctx && ctx.state === "running") ctx.suspend().catch(() => {}); } catch (e) {}
+  if (!("mediaSession" in navigator)) return;
+  try {
+    const t = new Date().toLocaleTimeString("de-DE", { hour: "2-digit", minute: "2-digit" });
+    navigator.mediaSession.metadata = new MediaMetadata({ title: "Aufzeichnung gestoppt", artist: "beendet um " + t, album: "Bitte „Alles speichern“ tippen" });
+    navigator.mediaSession.playbackState = "paused";
+  } catch (e) {}
+}
+function recWatch() {
+  const a = anyActive();
+  if (recWasActive && !a) recStopped();
+  recWasActive = a;
+}
+setInterval(recWatch, 1000);
 const ALIVE = "nachtplayer_aktiv";
 function aliveTick() {
   try {
