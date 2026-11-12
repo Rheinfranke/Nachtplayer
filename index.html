@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nachtplayer 2.2</title>
+<title>Nachtplayer 2.3</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 680px; margin: 1.5rem auto; padding: 0 1rem; color: #222; background: #fafaf7; line-height: 1.5; }
   h1 { font-size: 1.4rem; font-weight: 500; margin-bottom: 0.2rem; }
@@ -48,7 +48,7 @@
 </style>
 </head>
 <body>
-<h1>Nachtplayer 2.2</h1>
+<h1>Nachtplayer 2.3</h1>
 <label>Sense getragen am: <select id="nort"><option value="Fuß rechts">Fuß rechts (außen über dem Knöchel)</option><option value="Kiefer">Kiefer (über dem Kaumuskel)</option></select></label>
 <label style="font-size:1.1rem">Probanden-ID: <input type="text" id="pid" placeholder="z. B. MS01" style="width:9rem;font-size:1.1rem" autocomplete="off"></label>
 <div class="hint"><b>Ablauf:</b> 1. Probanden-ID eintragen. 2. Gurt anfeuchten und verbinden. 3. Sense am rechten Fuß außen über dem Knöchel einschalten (einmal kurz drücken) und verbinden, er blinkt dann bunt. 4. Thermometer verbinden. 5. Sense neben den Gurt halten und dreimal klopfen, bis „Abgleich erkannt“ kommt. 6. Wenn gewünscht Einschlafmusik starten, Schwarzsperre an. Morgens: Hauptknopf tippen und auf die Ansage hin klopfen, nach „Abgleich erkannt“ den Hauptknopf noch einmal tippen und „Nacht speichern“.</div>
@@ -2450,7 +2450,7 @@ async function buildSpar(D, stamp8) {
   const nR = steps.filter(s => s.side === "R" && s.sicher).length, nL = steps.filter(s => s.side === "L" && s.sicher).length;
   const gyInfo = GY.length ? `${GY.length} Pakete, Format ${GY[0].ft}, Faktor ${GY[0].fo ?? "keiner"}` : "keine";
   const KG = L.filter(r => r.typ === "Gewicht").map(r => parseFloat(r.name.replace(",", "."))).filter(Number.isFinite), KGv = KG.length ? KG[KG.length - 1] : null;
-  const KR = [["Feld", "Wert"], ["Version", "Messplayer 9.1"], ["Gewicht_kg", KGv], ["Datei", stamp8], ["Beginn", dstamp(new Date(T0)) + " " + tx(T0)], ["T0_Epoch_ms", Math.round(T0)],
+  const KR = [["Feld", "Wert"], ["Version", "Messplayer 9.2"], ["Gewicht_kg", KGv], ["Datei", stamp8], ["Beginn", dstamp(new Date(T0)) + " " + tx(T0)], ["T0_Epoch_ms", Math.round(T0)],
     ["BigData", $("bigdata").checked ? "an" : "aus"], ["Herzschläge", B.length], ["davon im EKG bestätigt", R.length ? al.ok : "kein EKG"],
     ["Versatz Herzschlag-Zeit zu EKG ms", al.lag], ["Klopfgruppen Brust", sync.gc.length], ["Klopfgruppen Sense", sync.gf.length],
     ["Abgleich Sense zu Brust ms", sync.pairs.length ? sync.pairs.map(p => `${tx(p.t)}: ${Math.round(p.off)} (${p.n === "live" ? "Stelle aus der Live-Erkennung" : p.n + " Klopfer"}, Ähnlichkeit ${Math.round(p.r * 100) / 100})`).join(" | ") : "kein Abgleich gefunden"],
@@ -2483,7 +2483,7 @@ async function buildSpar(D, stamp8) {
     const a2 = a, b2 = g[g.length - 1] + 2000;
     fen.push({ art, start_ms: Math.round(a2 - T0), ende_ms: Math.round(b2 - T0), spitzen_ms: g.map(x => Math.round((x - T0) * 10) / 10), brust: cut(A, a2, b2, 3), fuss: cut(F, a2, b2, 3), drehrate: cut(G, a2, b2, 3), ekg: cut(E, a2, b2, 1) });
   });
-  const json = JSON.stringify({ version: "Messplayer 9.1", gewicht_kg: KGv, t0_epoch_ms: Math.round(T0), beginn: dstamp(new Date(T0)) + " " + tx(T0), zeit: "Millisekunden seit t0, Fuß und Drehrate auf Brustuhr korrigiert",
+  const json = JSON.stringify({ version: "Messplayer 9.2", gewicht_kg: KGv, t0_epoch_ms: Math.round(T0), beginn: dstamp(new Date(T0)) + " " + tx(T0), zeit: "Millisekunden seit t0, Fuß und Drehrate auf Brustuhr korrigiert",
     einheiten: { brust: "mg", fuss: "mg", drehrate: "Grad pro Sekunde", ekg: "Mikrovolt" },
     abgleich: { methode: "Korrelation der Klopfspuren, Fuß plus Versatz = Brust", paare: sync.pairs.map(p => ({ t_ms: Math.round(p.t - T0), versatz_ms: p.off, aehnlichkeit: Math.round(p.r * 100) / 100, klopfer: p.n })), drift_ms_pro_h: sync.drift },
     herzschlag_ekg_versatz_ms: al.lag, fenster: fen,
@@ -2497,12 +2497,32 @@ async function buildSpar(D, stamp8) {
 function stullTw(T, RH) { return T * Math.atan(0.151977 * Math.sqrt(RH + 8.313659)) + Math.atan(T + RH) - Math.atan(RH - 1.676331) + 0.00391838 * Math.pow(RH, 1.5) * Math.atan(0.023101 * RH) - 4.686035; }
 function wbgtEst(T, RH) { return 0.7 * stullTw(T, RH) + 0.3 * T; }
 
-/* Kleinster und größter Puls je Herzschlag in gleitenden 10 s (±5 s), Ausreißer gegen den lokalen Median entfernt */
+/* Plausibilität der Herzschläge: EKG-bestätigte gelten immer. Sonst raus: einzelne Ausreißer (weicht von Vor- und Nachgänger um 25 Schläge pro Minute in dieselbe Richtung ab) und geteilte Schläge (zwei kurze Abstände, die zusammen einen normalen ergeben). Ein echter Anstieg über mehrere Schläge bleibt drin. */
+function beatPlaus(rr, ekg) {
+  const n = rr.length, ok = new Uint8Array(n), bad = new Uint8Array(n), p = new Float64Array(n);
+  for (let i = 0; i < n; i++) { ok[i] = rr[i] > 300 && rr[i] < 2000 ? 1 : 0; p[i] = ok[i] ? 60000 / rr[i] : NaN; }
+  const conf = i => !!(ekg && ekg[i]);
+  for (let i = 0; i + 1 < n; i++) {
+    if (!ok[i] || !ok[i + 1] || conf(i) || conf(i + 1)) continue;
+    const w = []; for (let k = Math.max(0, i - 6); k <= Math.min(n - 1, i + 7); k++) if (k !== i && k !== i + 1 && ok[k]) w.push(rr[k]);
+    if (w.length < 4) continue; w.sort((a, b) => a - b); const m = w[w.length >> 1];
+    if (Math.abs(rr[i] + rr[i + 1] - m) < 0.15 * m && Math.min(rr[i], rr[i + 1]) < 0.75 * m) { bad[i] = 1; bad[i + 1] = 1; }
+  }
+  for (let i = 0; i < n; i++) {
+    if (!ok[i] || conf(i) || bad[i]) continue;
+    let j = i - 1; while (j >= 0 && j >= i - 3 && !ok[j]) j--; let k = i + 1; while (k < n && k <= i + 3 && !ok[k]) k++;
+    const hj = j >= 0 && j >= i - 3 && ok[j], hk = k < n && k <= i + 3 && ok[k];
+    if (hj && hk) { const d1 = p[i] - p[j], d2 = p[i] - p[k]; if (Math.abs(d1) >= 25 && Math.abs(d2) >= 25 && d1 * d2 > 0) bad[i] = 1; }
+    else if (hj || hk) { const d = p[i] - p[hj ? j : k]; if (Math.abs(d) >= 40) bad[i] = 1; }
+  }
+  for (let i = 0; i < n; i++) if (bad[i]) ok[i] = 0;
+  return ok;
+}
+/* Kleinster und größter Puls je Herzschlag in gleitenden 10 s (±5 s), nur plausible Schläge */
 function pulseEnvelope(B) {
-  const t = [], p = [], n0 = B.length;
-  for (let i = 0; i < n0; i++) { const b = B[i]; if (b.rr > 300 && b.rr < 2000) { t.push(b.tt); p.push(60000 / b.rr); } }
-  const n = t.length, ok = new Uint8Array(n);
-  for (let i = 0; i < n; i++) { const w = p.slice(Math.max(0, i - 5), i + 6).sort((a, b) => a - b), md = w[w.length >> 1]; ok[i] = Math.abs(p[i] - md) < 25 ? 1 : 0; }
+  const t = [], p = [], q = [], e = [], n0 = B.length;
+  for (let i = 0; i < n0; i++) { const b = B[i]; if (b.rr > 300 && b.rr < 2000) { t.push(b.tt); p.push(60000 / b.rr); q.push(b.rr); e.push(b.ok ? 1 : 0); } }
+  const n = t.length, ok = beatPlaus(q, e);
   const lo = new Float32Array(n).fill(NaN), hi = new Float32Array(n).fill(NaN);
   let a = 0, b = 0;
   for (let i = 0; i < n; i++) {
@@ -2780,8 +2800,8 @@ function report9(S) {
     src.forEach(q => { const K = klima.filter(k => k.q === q), cs = K.map(k => k.c).filter(Number.isFinite), ws = K.map(k => k.w).filter(Number.isFinite), hs = K.map(k => k.h).filter(Number.isFinite);
       d.col(40, 40, 40, true).text(40, y, `${q}: ${K.length} Werte, ${f1(Math.min(...cs))} bis ${f1(Math.max(...cs))} °C, Luftfeuchte ${f0(Math.min(...hs))} bis ${f0(Math.max(...hs))} %, WBGT geschätzt ${f1(Math.min(...ws))} bis ${f1(Math.max(...ws))}`, 8.5); y -= 12; }); }
   d.col(120, 120, 120, true).text(40, 60, "WBGT geschätzt aus Temperatur und Luftfeuchte (Feuchttemperatur nach Stull, Kugeltemperatur gleich Thermometer), etwa ±2 Punkte.", 7)
-    .text(40, 50, "Puls Min–Max: 5 bis 95 Prozent der Schläge. RMSSD aus allen plausiblen Abständen. Bewegung: mittlere Abweichung des Beschleunigungsbetrags je 5 s.", 7)
-    .text(40, 40, "Messplayer 9.1. Uhrzeiten in Ortszeit.", 7);
+    .text(40, 50, "Puls Min–Max: 5 bis 95 Prozent der Schläge. RMSSD aus allen plausiblen Abständen. Plausibel: im EKG bestätigt oder kein einzelner Ausreißer. Bewegung: mittlere Abweichung des Beschleunigungsbetrags je 5 s.", 7)
+    .text(40, 40, "Messplayer 9.2. Uhrzeiten in Ortszeit.", 7);
   /* Seite 2: Verläufe */
   d.page().col(20, 20, 20, true).text(40, 800, "Verlauf", 16, true);
   const L = 70, Wd = 490;
@@ -3275,7 +3295,7 @@ function nightPdf(rep, raw, pid, nacht, pulseMin, lageMin, tps) {
   return d.bytes();
 }
 
-/* ================= Nachtplayer 2.2: Auswertung neu (überschreibt lageOf, nightReport, nightPdf aus bericht.js) =================
+/* ================= Nachtplayer 2.3: Auswertung neu (überschreibt lageOf, nightReport, nightPdf aus bericht.js) =================
    Neu: Puls oben = schneller, Mittelung als Verhältnis der Mittel, Streuung (Bootstrap über Häufungen), Seitenlage links/rechts,
    Serien von Zuckungen, einzelne Zuckung gegen Serie, Atem um die Zuckung, Puls je Minute mit Spannweite, Beispielserie. */
 const SER = { min: 4, lo: 5000, hi: 90000, haeufung: 120000 };
@@ -3473,7 +3493,7 @@ function nightReport(raw, pid, startText) {
   const r1 = v => v === null || v === undefined ? null : Math.round(v * 10) / 10;
   idx.forEach((j, i) => MR.push([pid, j, tz[i] === null ? null : Math.round(tz[i]) / 1000, r1(mc && mc[i]), r1(bz && bz.lo[i]), r1(bz && bz.hi[i]), r1(cc && cc[i]), r1(bc && bc.lo[i]), r1(bc && bc.hi[i]), r1(einz && einz.c[i]), r1(seri && seri.c[i]), valid.length, einz ? einz.n : 0, seri ? seri.n : 0, ctrl.length]));
   const fci = c => c ? `[${r1(c[0])}; ${r1(c[1])}]` : "";
-  const KR = [["Feld", "Wert"], ["Proband", pid], ["Nacht", nacht], ["Beginn der Aufzeichnung", stamp(new Date(T0))], ["Version", "Nachtplayer 2.2"],
+  const KR = [["Feld", "Wert"], ["Proband", pid], ["Nacht", nacht], ["Beginn der Aufzeichnung", stamp(new Date(T0))], ["Version", "Nachtplayer 2.3"],
     ["Zuckungen gesamt", zu.length], ["gültig", valid.length], ["ausgeschlossen: weniger als 15 s Ruhe davor", why.ruhe], ["ausgeschlossen: Schritte in der Nähe", why.schritt],
     ["ausgeschlossen: Brustbewegung oder Umdrehen", why.brust], ["ausgeschlossen: Herzschläge nicht vollständig oder unplausibel im EKG", why.ekg],
     ["Häufungen (Abstand über 2 Minuten trennt)", byH.size],
@@ -3513,8 +3533,9 @@ function nightPdf(rep, raw, pid, nacht, pulseMin, lageMin, tps) {
   const pm = pulseMin.map(p => p[1]).sort((a, b) => a - b), med = pm.length ? pm[pm.length >> 1] : 0;
   d.text(40, 768, `Zuckungen ${rep.zu.length}, gültig ${rep.valid.length}, davon in ${rep.serien.length} Serien ${rep.inSer} (${rep.zu.length ? Math.round(100 * rep.inSer / rep.zu.length) : 0} %). Puls im Median ${Math.round(med)} pro Minute.`, 10);
   { /* Spannweite: je 10 s kleinster und größter Schlag, je Minute der Median */
-    const s10 = new Map(); B.forEach(b => { if (b.rr > 300 && b.rr < 2000) { const k = Math.floor(b.tt / 10000); if (!s10.has(k)) s10.set(k, []); s10.get(k).push(60000 / b.rr); } });
-    const mm = new Map(); [...s10.entries()].forEach(([k, v]) => { const sv = v.sort((a, b) => a - b), md = sv[sv.length >> 1], g = sv.filter(x => Math.abs(x - md) <= 25); if (!g.length) return; const m = Math.floor(k / 6); if (!mm.has(m)) mm.set(m, { lo: [], hi: [] }); mm.get(m).lo.push(g[0]); mm.get(m).hi.push(g[g.length - 1]); });
+    const okB = beatPlaus(B.map(b => b.rr), B.map(b => b.ok ? 1 : 0));
+    const s10 = new Map(); B.forEach((b, i) => { if (okB[i]) { const k = Math.floor(b.tt / 10000); if (!s10.has(k)) s10.set(k, []); s10.get(k).push(60000 / b.rr); } });
+    const mm = new Map(); [...s10.entries()].forEach(([k, v]) => { const g = v.sort((a, b) => a - b); if (!g.length) return; const m = Math.floor(k / 6); if (!mm.has(m)) mm.set(m, { lo: [], hi: [] }); mm.get(m).lo.push(g[0]); mm.get(m).hi.push(g[g.length - 1]); });
     const mdn = a => { const v = a.sort((x, y) => x - y); return v[v.length >> 1]; };
     const SP = [...mm.keys()].sort((a, b) => a - b).map(m => [m * 60000 + 30000, mdn(mm.get(m).lo), mdn(mm.get(m).hi)]);
     const c = pdfChart(d, { x: L, y: 590, w: WD, h: 150 }, { title: "Puls je Minute mit Spannweite (Schläge pro Minute)", xr: [T0, t1], yr: [30, 110], xt, xf: hr, yt: [30, 50, 70, 90, 110] });
@@ -3540,7 +3561,7 @@ function nightPdf(rep, raw, pid, nacht, pulseMin, lageMin, tps) {
       const c = pdfChart(d, { x: L, y: 110, w: WD, h: 110 }, { title: "Raumtemperatur (°C)", xr: [T0, t1], yr: [lo, hi], xt, xf: hr, yt: [lo, Math.round((lo + hi) / 2), hi], yf: v => String(v) });
       d.lw(1.4).col(...orange, false).poly(T.map(p => [c.X(Math.max(T0, Math.min(t1, p.t))), c.Y(p.c)])); }
     else d.col(120, 120, 120, true).text(L, 160, "Keine Temperaturwerte in dieser Nacht.", 9); }
-  foot(`Nachtplayer 2.2. Uhrzeiten in Ortszeit. Seitenlage: ${SIDE.quelle}.`);
+  foot(`Nachtplayer 2.3. Uhrzeiten in Ortszeit. Seitenlage: ${SIDE.quelle}.`);
 
   /* gemeinsame Zeichnung: Puls Schlag für Schlag auf der Zeitachse ab T0 */
   const tz = rep.tz.map(v => v === null ? null : v / 1000), ix = rep.idx.map((j, i) => i).filter(i => rep.idx[i] >= -10 && rep.idx[i] <= 12);
@@ -3666,7 +3687,7 @@ function nightKern(rep, raw, pid, nacht, pulseMin, log) {
   const T = (rep.Rc && rep.Rc.length) ? null : null;
   const TPs = (raw.TP || []).filter(p => Number.isFinite(p.c)).map(p => p.c);
   const k = {
-    format: "Nachtkern", version: 1, player: "Nachtplayer 2.2", proband: pid, nacht, t0_epoch_ms: Math.round(raw.T0),
+    format: "Nachtkern", version: 1, player: "Nachtplayer 2.3", proband: pid, nacht, t0_epoch_ms: Math.round(raw.T0),
     kopf: { trageort: last("Trageort") || "Fuß rechts", gewicht: last("Gewicht"), gefuehl: last("Gefühl"), seitenlage: SIDE.quelle,
       temperatur_min: TPs.length ? Math.min(...TPs) : null, temperatur_max: TPs.length ? Math.max(...TPs) : null,
       zuckungen: rep.zu.length, gueltig: rep.valid.length, serien: rep.serien.length, in_serien: rep.inSer, ausgeschlossen: rep.why,
@@ -3733,7 +3754,7 @@ $("tpnew").addEventListener("click", async () => {
   $("tpget").click();
 });
 
-/* ================= Nachtplayer 2.2: Trageort des Sense, Gefühl beim Hinlegen ================= */
+/* ================= Nachtplayer 2.3: Trageort des Sense, Gefühl beim Hinlegen ================= */
 try { const o = localStorage.getItem("nacht_ort"); if (o) $("nort").value = o; } catch (e) {}
 $("nort").addEventListener("change", () => { try { localStorage.setItem("nacht_ort", $("nort").value); } catch (e) {} addEntry({ typ: "Trageort", name: $("nort").value, start: Date.now() }); flush(); });
 setTimeout(() => { if (!log.some(r => r.typ === "Trageort")) addEntry({ typ: "Trageort", name: $("nort").value, start: Date.now() }); }, 1500);
