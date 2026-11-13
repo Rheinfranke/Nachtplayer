@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Nachtplayer 2.3</title>
+<title>Nachtplayer 2.4</title>
 <style>
   body { font-family: system-ui, sans-serif; max-width: 680px; margin: 1.5rem auto; padding: 0 1rem; color: #222; background: #fafaf7; line-height: 1.5; }
   h1 { font-size: 1.4rem; font-weight: 500; margin-bottom: 0.2rem; }
@@ -48,13 +48,14 @@
 </style>
 </head>
 <body>
-<h1>Nachtplayer 2.3</h1>
+<h1>Nachtplayer 2.4</h1>
 <label>Sense getragen am: <select id="nort"><option value="Fuß rechts">Fuß rechts (außen über dem Knöchel)</option><option value="Kiefer">Kiefer (über dem Kaumuskel)</option></select></label>
 <label style="font-size:1.1rem">Probanden-ID: <input type="text" id="pid" placeholder="z. B. MS01" style="width:9rem;font-size:1.1rem" autocomplete="off"></label>
 <div class="hint"><b>Ablauf:</b> 1. Probanden-ID eintragen. 2. Gurt anfeuchten und verbinden. 3. Sense am rechten Fuß außen über dem Knöchel einschalten (einmal kurz drücken) und verbinden, er blinkt dann bunt. 4. Thermometer verbinden. 5. Sense neben den Gurt halten und dreimal klopfen, bis „Abgleich erkannt“ kommt. 6. Wenn gewünscht Einschlafmusik starten, Schwarzsperre an. Morgens: Hauptknopf tippen und auf die Ansage hin klopfen, nach „Abgleich erkannt“ den Hauptknopf noch einmal tippen und „Nacht speichern“.</div>
 
 <button class="main" id="master" disabled>Noch keine Aufzeichnung aktiv</button>
 <div id="batstatus" class="stat"></div>
+<div id="syncstatus" class="stat"></div>
 <div id="crash" class="hint" style="display:none;color:#b00020"></div>
 <div id="bar"><span id="wl">Bildschirm: nicht nötig</span> · <span id="dur">keine Aufzeichnung</span> · <span id="mem">Speicher …</span></div>
 
@@ -165,7 +166,16 @@
   <div id="tp2status" class="stat"></div>
   <div class="hint">Ruuvi: der kleine Umgebungssensor zum Tragen. Er schickt Temperatur, Luftfeuchte, Luftdruck und Bewegung, solange er verbunden ist.</div>
   <button id="ruconnect">Ruuvi verbinden</button> <button id="rustop" disabled>Ruuvi trennen</button>
+  <label>Ruuvi getragen: <select id="ruort"><option value="Raum">im Raum (Lufttemperatur, WBGT)</option><option value="Körper">am Körper (Bauch, Hauttemperatur)</option></select></label>
   <div id="rustatus" class="stat"></div>
+</fieldset>
+<fieldset>
+  <legend>Markeruhr (Bangle.js 2)</legend>
+  <div class="hint">Ein Druck auf den Knopf der Uhr setzt einen Marker mit genauer Zeit, danach 10 s Auswahl auf dem Bildschirm. Vorher App Loader oder Espruino IDE trennen, die Uhr kann nur mit einem Gerät verbunden sein.</div>
+  <button id="bgconnect">Uhr verbinden</button> <button id="bgstop" disabled>Uhr trennen</button>
+  <label>Eigene Ereignisse auf der Uhr (durch Komma getrennt): <input id="bgfelder" type="text" style="width:100%" placeholder="zum Beispiel Kaffee, Telefonat, Treppe"></label>
+  <label>Licht der Uhr: <select id="bglicht"><option value="0">aus</option><option value="0.1">schwach</option><option value="0.4">mittel</option><option value="1">hell</option></select></label>
+  <div id="bgstatus" class="stat"></div>
 </fieldset>
 
 <button class="main" id="start" disabled style="display:none">Musik starten</button>
@@ -324,9 +334,13 @@ const keep = new Audio(toneWav(8, 0.003)); keep.loop = true;
 let keepLogged = false, keepOwn = false, keepHoldUntil = 0;
 /* Eigene Pause markieren. Hält jemand anderes den Ton an (Wecker, Anruf), 10 Minuten nicht neu starten, sonst nimmt der Player dem Wecker den Ton weg. */
 function keepPause() { if (keep.paused) return; keepOwn = true; try { keep.pause(); } catch (e) {} }
+/* 9.3: Kommt die Pause mit einem Wechsel der Audiogeräte (Auto, Kopfhörer), ist es kein Wecker: Ton gleich wieder an */
+let lastDevChange = 0, keepHoldSet = 0;
 keep.addEventListener("pause", () => {
   if (keepOwn) { keepOwn = false; return; }
-  if ($("keepon").checked && needAwake()) { keepHoldUntil = Date.now() + 600000; addEntry({ typ: "Bildschirm", name: "Ton unterbrochen (Wecker oder Anruf), Wachhalte-Ton ruht 10 Minuten", start: Date.now() }); }
+  if (!$("keepon").checked || !needAwake()) return;
+  if (Date.now() - lastDevChange < 3000) { addEntry({ typ: "Bildschirm", name: "Ton durch Wechsel der Audiogeräte unterbrochen, Wachhalte-Ton läuft weiter", start: Date.now() }); setTimeout(keepTone, 800); return; }
+  keepHoldUntil = Date.now() + 600000; keepHoldSet = Date.now(); addEntry({ typ: "Bildschirm", name: "Ton unterbrochen (Wecker oder Anruf), Wachhalte-Ton ruht 10 Minuten", start: Date.now() });
 });
 function keepTone() {
   if (!$("keepon").checked || !needAwake()) { keepPause(); return; }
@@ -893,7 +907,12 @@ class Tracker {
     }
     const flat = g.flat / g.n, cen = g.cen / g.n;
     let cls = "gemischt";
-    if (lev < -65) cls = "Ruhe";
+    if (this.src === "Mikro") {
+      if (lev < -85) { this.dead = (this.dead || 0) + 1; if (this.dead === 10) { addEntry({ typ: "Mikrofon", name: "Mikrofon stumm (seit 10 s unter −85 dBFS), wird neu angefordert", start: now - 10000 }); micRestart(); } }
+      else { if ((this.dead || 0) >= 10) addEntry({ typ: "Mikrofon", name: "Mikrofon liefert wieder", start: now }); this.dead = 0; }
+    }
+    if (lev < -85) cls = "stumm";
+    else if (lev < -65) cls = "Ruhe";
     else if (flat < 0.3 && (tstr > 0.3 || (kstr > 0.75 && sd < 4))) cls = "Musik";
     else if (sd > 5 && cen > 300 && cen < 3500 && flat < 0.35) cls = "Sprache";
     else if (flat > 0.3) cls = "Rauschen/Lärm";
@@ -949,10 +968,26 @@ async function listMics() {
   } catch (e) {}
 }
 navigator.mediaDevices?.addEventListener?.("devicechange", () => {
+  lastDevChange = Date.now();
+  if (keepHoldUntil > Date.now() && Date.now() - keepHoldSet < 3000) { keepHoldUntil = 0; addEntry({ typ: "Bildschirm", name: "Pause kam vom Wechsel der Audiogeräte, Wachhalte-Ton läuft weiter", start: Date.now() }); setTimeout(keepTone, 800); }
   listMics();
   if (micOn || running) addEntry({ typ: "Audiogerät", name: "Audiogeräte geändert (Kopfhörer verbunden oder getrennt?)", start: Date.now() });
   trackers.forEach(t => { if (t.src === "Mikro") t.resetBg(Date.now()); });
 });
+
+/* 9.3: Mikrofon neu anfordern, wenn es stumm wird (zum Beispiel nimmt die Freisprechanlage es weg), höchstens einmal pro Minute */
+let micRestarting = false, micRestartAt = 0;
+async function micRestart() {
+  if (!micOn || micRestarting || Date.now() - micRestartAt < 60000) return; micRestarting = true; micRestartAt = Date.now();
+  try {
+    micStream?.getTracks().forEach(t => t.stop()); const id = $("micdev").value;
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: { deviceId: id ? { exact: id } : undefined, echoCancellation: false, noiseSuppression: false, autoGainControl: false } });
+    ensureCtx(); const src = ctx.createMediaStreamSource(micStream), an = mkAnalyser(); src.connect(an);
+    trackers = trackers.filter(t => t.src !== "Mikro"); trackers.push(new Tracker("Mikro", an, true));
+    addEntry({ typ: "Mikrofon", name: "Mikrofon neu angefordert: " + (micStream.getAudioTracks()[0]?.label || "Mikrofon"), start: Date.now(), session: micRec });
+  } catch (e) { addEntry({ typ: "Mikrofon", name: "Mikrofon neu anfordern fehlgeschlagen: " + (e.message || e), start: Date.now() }); }
+  micRestarting = false;
+}
 $("micstart").addEventListener("click", async () => {
   try {
     ensureCtx();
@@ -1445,6 +1480,7 @@ const syncGate = { open: true, why: "Beginn" };
 function syncOpen(why, announce) {
   syncGate.open = true; syncGate.why = why; tapLive.c.length = 0; tapLive.f.length = 0;
   addEntry({ typ: "Abgleich", name: `Abgleich offen: ${why}`, start: Date.now() });
+  syncShow(`Abgleich offen seit ${stamp(new Date()).slice(0, 8)} (${why}): fünfmal gleichmäßig klopfen`);
   if (announce) say("Bitte zum Abgleich klopfen");
 }
 
@@ -1489,6 +1525,94 @@ setInterval(() => {
   if (!tp2Dev || tp2Busy || tpBusy || !needAwake() || reconnecting || vReconn) return;
   if (Date.now() - tp2LastTry >= $("tpint").value * 60000) tp2Fetch();
 }, 10000);
+
+
+/* ================= 9.3: Markeruhr (Bangle.js 2) über den Nordic UART Service =================
+   Player -> Uhr: setTime, MK.hello(), MK.ack(id), MK.set({...}); Uhr -> Player: Zeilen {"mk":...}. Texte als Latin-1. */
+const NUS_RX = "6e400002-b5a3-f393-e0a9-e50e24dcca9e";
+let bgDev = null, bgRx = null, bgTx = null, bgWanted = false, bgReconn = false, bgBuf = "", bgOff = 0, bgState = "", bgListened = null, bgQ = Promise.resolve(), bgHi = false;
+const bgSeen = new Set();
+function bgStatus(t) { const el = $("bgstatus"); if (el) el.textContent = t; }
+const bgLatin = s => s.replace(/[\u0080-ÿ]/g, c => "\\x" + c.charCodeAt(0).toString(16).padStart(2, "0")).replace(/[^\x00-\x7f]/g, "?");
+async function bgWrite(cmd) { if (!bgRx) return; const b = new TextEncoder().encode("\x10" + bgLatin(cmd) + "\n"); for (let i = 0; i < b.length; i += 20) await bgRx.writeValue(b.slice(i, i + 20)); }
+function bgSend(cmd) { bgQ = bgQ.then(() => bgWrite(cmd)).catch(() => {}); return bgQ; }
+function bgFelder() { return ($("bgfelder")?.value || "").split(",").map(s => s.trim()).filter(Boolean).slice(0, 20); }
+function bgLicht() { return parseFloat($("bglicht")?.value || "0") || 0; }
+function bgDevState() {
+  const ort = ($("nort")?.value || "Fuß").startsWith("Kiefer") ? "Kiefer" : "Fuß";
+  return { brust: hrDev?.gatt?.connected ? 1 : 0, fuss: vDev?.gatt?.connected ? 1 : 0, ort, temp: (tpDev || tp2Dev || ruDev?.gatt?.connected) ? 1 : 0 };
+}
+function bgSync(first) {
+  if (!bgRx || !bgHi) return;
+  const st = { rec: anyActive() ? 1 : 0, dev: bgDevState() }, s = JSON.stringify(st);
+  if (s === bgState) return;
+  const prev = bgState ? JSON.parse(bgState) : null; bgState = s;
+  if (!first && prev && !prev.rec && st.rec) st.neu = 1;
+  bgSend(`MK.set(${JSON.stringify(st)})`);
+}
+setInterval(() => bgSync(false), 5000);
+function bgMsg(o) {
+  const now = Date.now();
+  if (o.mk === "hi") {
+    bgOff = now - o.t; bgHi = true;
+    addEntry({ typ: "Uhr", name: `Markeruhr ${o.v} bereit, Akku ${o.bat} %, ${o.offen} Ereignisse offen, Versatz ${Math.round(bgOff)} ms`, start: now });
+    batSet("Uhr", o.bat, o.bat + " %", o.bat < 15);
+    bgStatus(`Uhr verbunden, Akku ${o.bat} %, ${o.offen} Ereignisse offen.`);
+    bgSend(`MK.set(${JSON.stringify({ felder: bgFelder(), licht: bgLicht() })})`); bgState = ""; bgSync(true);
+  }
+  if (o.mk === "ev") {
+    if (!bgSeen.has(o.id)) {
+      bgSeen.add(o.id); const t = Math.abs(bgOff) < 600000 ? o.t + bgOff : o.t;
+      addEntry({ typ: "Marker", name: String(o.n || "Marker") + " (Uhr)", start: Math.round(t) }); flush();
+      bgStatus(`Letzter Marker ${stamp(new Date(t)).slice(0, 8)}: ${o.n}`);
+    }
+    bgSend(`MK.ack(${o.id | 0})`);
+  }
+}
+function onBg(ev) {
+  const v = ev.target.value; bgBuf += new TextDecoder("iso-8859-1").decode(new Uint8Array(v.buffer, v.byteOffset, v.byteLength));
+  let k; while ((k = bgBuf.indexOf("\n")) >= 0) { const line = bgBuf.slice(0, k).trim(); bgBuf = bgBuf.slice(k + 1); const j = line.indexOf('{"mk"'); if (j < 0) continue; try { bgMsg(JSON.parse(line.slice(j))); } catch (e) {} }
+  if (bgBuf.length > 4000) bgBuf = bgBuf.slice(-1000);
+}
+async function bgAttach() {
+  const s = await bgDev.gatt.connect(), svc = await s.getPrimaryService(NUS);
+  bgRx = await svc.getCharacteristic(NUS_RX); bgTx = await svc.getCharacteristic(NUS_TX);
+  bgTx.removeEventListener("characteristicvaluechanged", onBg); bgTx.addEventListener("characteristicvaluechanged", onBg); await bgTx.startNotifications();
+  bgBuf = ""; bgHi = false;
+  await bgSend(`setTime(${(Date.now() / 1000).toFixed(3)});MK.hello()`);
+  setTimeout(() => { if (bgWanted && !bgHi) bgStatus("Uhr verbunden, aber die Markeruhr antwortet nicht. Ist sie als Zifferblatt aktiv?"); }, 6000);
+}
+async function onBgLost() {
+  bgRx = null; bgHi = false; if (!bgWanted || bgReconn) return;
+  bgReconn = true; bgStatus("Uhr: Verbindung verloren, verbinde neu …"); addEntry({ typ: "Uhr", name: "Verbindung verloren", start: Date.now() });
+  for (let i = 0; i < 60 && bgWanted; i++) { try { await bgAttach(); addEntry({ typ: "Uhr", name: "Wieder verbunden", start: Date.now() }); bgReconn = false; return; } catch (e) { await wait(5000); } }
+  bgReconn = false; bgStatus("Uhr: Neu verbinden fehlgeschlagen. Die Marker bleiben auf der Uhr gespeichert.");
+}
+function bgBind() {
+  const b = $("bgconnect"); if (!b) return;
+  try { const f = localStorage.getItem("bangle_felder"); if (f !== null) $("bgfelder").value = f; const l = localStorage.getItem("bangle_licht"); if (l !== null) $("bglicht").value = l; } catch (e) {}
+  b.addEventListener("click", async () => {
+    if (!navigator.bluetooth) { bgStatus("Bluetooth ist in diesem Browser nicht verfügbar."); return; }
+    try {
+      const dev = await navigator.bluetooth.requestDevice({ filters: [{ namePrefix: "Bangle" }], optionalServices: [NUS] });
+      if (bgDev && bgDev !== dev) { try { bgDev.gatt.disconnect(); } catch (e) {} }
+      bgDev = dev; if (bgListened !== dev) { bgListened = dev; dev.addEventListener("gattserverdisconnected", onBgLost); }
+      bgStatus("Verbinde …"); bgWanted = true; await bgAttach();
+      addEntry({ typ: "Uhr", name: "Verbunden: " + (dev.name || "Bangle"), start: Date.now() });
+      b.textContent = "Uhr neu verbinden"; $("bgstop").disabled = false;
+    } catch (e) { bgStatus("Verbindung nicht möglich: " + (e && e.message ? e.message : e)); }
+  });
+  $("bgstop").addEventListener("click", () => {
+    bgWanted = false; try { bgDev?.gatt.disconnect(); } catch (e) {}
+    addEntry({ typ: "Uhr", name: "Getrennt", start: Date.now() }); bgStatus("Getrennt. Marker ohne Verbindung bleiben auf der Uhr und kommen beim nächsten Verbinden."); $("bgstop").disabled = true; $("bgconnect").textContent = "Uhr verbinden"; flush();
+  });
+  const upd = () => { try { localStorage.setItem("bangle_felder", $("bgfelder").value); localStorage.setItem("bangle_licht", $("bglicht").value); } catch (e) {} if (bgHi) bgSend(`MK.set(${JSON.stringify({ felder: bgFelder(), licht: bgLicht() })})`); };
+  $("bgfelder").addEventListener("change", upd); $("bglicht").addEventListener("change", upd);
+  /* Ruuvi-Trageort */
+  const ro = $("ruort"); if (ro) { try { const v = localStorage.getItem("ruuvi_ort"); if (v) ro.value = v; } catch (e) {}
+    ro.addEventListener("change", () => { try { localStorage.setItem("ruuvi_ort", ro.value); } catch (e) {} addEntry({ typ: "Trageort Ruuvi", name: ro.value, start: Date.now() }); flush(); }); }
+}
+setTimeout(bgBind, 0);
 
 /* RuuviTag: Verbindung über den Nordic UART Service, Datenformat 5 (oder 3) */
 const NUS = "6e400001-b5a3-f393-e0a9-e50e24dcca9e", NUS_TX = "6e400003-b5a3-f393-e0a9-e50e24dcca9e";
@@ -1541,6 +1665,7 @@ function ruBind() {
       ruDev = dev; if (ruListened !== dev) { ruListened = dev; dev.addEventListener("gattserverdisconnected", onRuLost); }
       ruStatus("Verbinde …"); await ruAttach(); ruWanted = true;
       addEntry({ typ: "Ruuvi", name: "Verbunden: " + (dev.name || "Ruuvi"), start: Date.now() });
+      addEntry({ typ: "Trageort Ruuvi", name: $("ruort")?.value || "Raum", start: Date.now() });
       b.textContent = "Ruuvi neu verbinden"; $("rustop").disabled = false;
       ruStatus("Verbunden mit " + (dev.name || "Ruuvi") + ". Warte auf Daten …");
       setTimeout(() => { if (ruWanted && !ruN) ruStatus("Verbunden, aber noch keine Daten. Falls das so bleibt: in der Ruuvi-App die Firmware aktualisieren und das ZIP schicken."); }, 20000);
@@ -1874,14 +1999,93 @@ function tapGrp(L) {
   if (s > 0 && L[s] - L[s - 1] < 1800) return null;
   return L.slice(s);
 }
+/* 9.3: Live zuerst an der Brust (dort sind Klopfer eindeutig), am Fuß genügen gleich viele Spitzen im selben Zeitraum */
 function tapCheck() {
-  const gc = tapGrp(tapLive.c), gf = tapGrp(tapLive.f); if (!gc || !gf) return;
-  if (Math.abs(gc[0] - gf[0]) > 3000 || gc[0] === tapLive.done) return;
+  const gc = tapGrp(tapLive.c); if (!gc) return;
+  if (gc[0] === tapLive.done) return;
+  const fa = gc[0] - 1500, fb = gc[gc.length - 1] + 1500, fl = tapLive.f.filter(t => t >= fa && t <= fb);
+  if (fl.length < Math.max(3, gc.length - 1)) return;
+  const gf = fl;
   tapLive.done = gc[0];
   if (!syncGate.open) return;
   syncGate.open = false;
   addEntry({ typ: "Abgleich", name: `Klopfen an Gurt und Sense erkannt (${gc.length} an der Brust, ${gf.length} am Fuß), grober Versatz ${Math.round(gc[0] - gf[0])} ms, genau beim Speichern`, start: gc[0] });
+  syncShow(`Letzter Abgleich ${stamp(new Date(gc[0])).slice(0, 8)}: erkannt (${gc.length} Klopfer Brust, ${gf.length} Fuß), genau beim Speichern`);
   $("vstatus").textContent = "Abgleich erkannt ✓"; say(endArm ? "Abgleich erkannt. Zum Beenden nochmal tippen" : "Abgleich erkannt"); flush(); masterShow();
+}
+
+
+/* ================= 9.3: Klopferkennung über den Rhythmus =================
+   Brust: Ruckspitzen (Betrag der Differenz je Abtastung), überwiegend z, über dem 4-Fachen des Hintergrunds.
+   Fuß: Ruckspitzen als Kandidaten (Hantieren erzeugt dort ähnlich große Spitzen).
+   Der Rhythmus der Brustklopfer muss sich am Fuß wiederfinden: Versatz plus minus 3 s, Treffer je 40 ms.
+   Angenommen nur, wenn mindestens 3 und höchstens einer weniger als alle Brustklopfer treffen und keine andere Stelle gleich gut ist. */
+function jerkPeaks(X, a, b, chest) {
+  if (!X) return [];
+  const i0 = Math.max(1, lowerBound(X.t, a)), i1 = Math.min(X.t.length, lowerBound(X.t, b)), J = [];
+  for (let i = i0; i < i1; i++) { const dx = X.c[0][i] - X.c[0][i - 1], dy = X.c[1][i] - X.c[1][i - 1], dz = X.c[2][i] - X.c[2][i - 1]; J.push([X.t[i], Math.hypot(dx, dy, dz), Math.abs(dz)]); }
+  if (J.length < 20) return [];
+  const s = J.map(j => j[1]).sort((p, q) => p - q), p90 = s[Math.floor(0.9 * (s.length - 1))], p75 = s[Math.floor(0.75 * (s.length - 1))];
+  const thr = chest ? Math.max(600, 4 * p90) : Math.max(500, 3 * p75), out = [];
+  for (let k = 1; k < J.length - 1; k++) {
+    const j = J[k]; if (j[1] < thr || j[1] < J[k - 1][1] || j[1] < J[k + 1][1]) continue;
+    if (chest && j[2] / j[1] < 0.6) continue;
+    const L = out[out.length - 1]; if (L && j[0] - L[0] < 120) { if (j[1] > L[1]) out[out.length - 1] = j; } else out.push(j);
+  }
+  return out.map(j => j[0]);
+}
+function chestGroups(A, a, b) {
+  const k = jerkPeaks(A, a, b, true), g = []; let cur = [];
+  k.forEach(t => { if (cur.length && (t - cur[cur.length - 1] < 150 || t - cur[cur.length - 1] > 1600)) { if (cur.length >= 3) g.push(cur); cur = []; } cur.push(t); });
+  if (cur.length >= 3) g.push(cur);
+  return g.filter(x => x.length <= 12);
+}
+function rhythmMatch(G, F) {
+  const fk = jerkPeaks(F, G[0] - 3500, G[G.length - 1] + 3500, false); if (fk.length < 3) return null;
+  const res = [];
+  for (let L = -3000; L <= 3000; L += 2) {
+    let hit = 0, se = 0;
+    for (const c of G) { let m = 1e9; for (const f of fk) { const e = Math.abs(f + L - c); if (e < m) m = e; } if (m <= 40) { hit++; se += m; } }
+    res.push({ L, hit, err: hit ? se / hit : 99 });
+  }
+  let best = res[0]; res.forEach(r => { if (r.hit > best.hit || (r.hit === best.hit && r.err < best.err)) best = r; });
+  let second = 0; res.forEach(r => { if (Math.abs(r.L - best.L) > 100 && r.hit > second) second = r.hit; });
+  if (best.hit < 3 || best.hit < G.length - 1 || second >= best.hit) return null;
+  const d = [];
+  G.forEach(c => { let m = null; fk.forEach(f => { const e = c - f; if (Math.abs(e - best.L) <= 40 && (m === null || Math.abs(e - best.L) < Math.abs(m - best.L))) m = e; }); if (m !== null) d.push(m); });
+  d.sort((p, q) => p - q);
+  return { t: G[0], off: Math.round(d[d.length >> 1]), r: 1, n: G.length, streu: Math.round(d[d.length - 1] - d[0]), art: "Rhythmus", treffer: best.hit, zweitbeste: second };
+}
+
+/* 9.3: letzter Abgleich im Kopf der Seite */
+function syncShow(t) { const el = $("syncstatus"); if (el) el.textContent = t; }
+
+/* 9.3: Herzschläge aus den R-Zacken des EKG, wo das EKG mit dem Gurt übereinstimmt (je 10 s gleich viele Schläge, höchstens einer Unterschied).
+   Sonst bleiben die Schläge vom Gurt. So stören springende Zeitstempel (Bluetooth im Auto) und schneller, gleichmäßiger Puls die Zuordnung nicht mehr. */
+function ekgBeats(B, R) {
+  /* Die Folge der Gurt-Abstände wird in Blöcken zu 20 Schlägen an die Folge der R-R-Abstände gelegt (unabhängig von den Zeitstempeln des Gurts,
+     die im Auto um Sekunden springen). Treffen mindestens 14 von 20 auf 30 ms, bekommt jeder Schlag die Zeit seiner R-Zacke und gilt als bestätigt.
+     Der Abstand bleibt der vom Gurt (genauer als die R-Zacken bei 130 Hz). Bei gleich guten Lagen gewinnt die Fortsetzung der vorigen, sonst die zeitlich nächste. */
+  if (!R || R.length < 50 || !B.length) return null;
+  const out = B.map(b => Object.assign({}, b, { ok: false, ekg: 0 }));
+  let prev = null, nE = 0;
+  for (let i0 = 0; i0 < B.length; i0 += 20) {
+    const n = Math.min(20, B.length - i0); if (n < 8) break;
+    const cand = new Set();
+    if (prev !== null) for (let d = -15; d <= 15; d++) cand.add(prev + d);
+    { let k = lowerBound(R, B[i0].tt - 8000); for (; k < R.length && R[k] < B[i0].tt + 8000; k++) cand.add(k - i0); }
+    let best = null;
+    cand.forEach(off => {
+      let hit = 0; for (let i = 0; i < n; i++) { const k = i0 + i + off; if (k < 1 || k >= R.length) continue; if (Math.abs(B[i0 + i].rr - (R[k] - R[k - 1])) < 30) hit++; }
+      const key = [hit, prev !== null ? -Math.abs(off - prev) : 0, -Math.abs((R[Math.min(R.length - 1, Math.max(0, i0 + off))] || 0) - B[i0].tt)];
+      if (!best || key[0] > best.key[0] || (key[0] === best.key[0] && (key[1] > best.key[1] || (key[1] === best.key[1] && key[2] > best.key[2])))) best = { off, key };
+    });
+    if (best && best.key[0] >= Math.ceil(0.7 * n)) {
+      prev = best.off;
+      for (let i = 0; i < n; i++) { const k = i0 + i + best.off; if (k < 1 || k >= R.length) continue; if (Math.abs(B[i0 + i].rr - (R[k] - R[k - 1])) < 60) { out[i0 + i].tt = R[k]; out[i0 + i].t = R[k]; out[i0 + i].ok = true; out[i0 + i].ekg = 1; nE++; } }
+    } else prev = null;
+  }
+  return { beats: out, nE };
 }
 
 /* ================= Version 8: Sparmodus (Excel und JSON) ================= */
@@ -2077,7 +2281,7 @@ function peakOff(gc, gf, h) {
   }
   return best;
 }
-function tapSync(A, F, hints) {
+function tapSync(A, F, hints, reqs) {
   const gc = tapGroups(A, W(A, 0.3), 250), gf = tapGroups(F, W(F, 0.3), 1000), pairs = [];
   if (gc.length && F) {
     const ha = magHP(A, W(A, 0.3)), hf = magHP(F, W(F, 0.3));
@@ -2107,11 +2311,19 @@ function tapSync(A, F, hints) {
     if (live.length) { pairs.length = 0; pairs.push(...live); }
     pairs.sort((a, b) => a.t - b.t);
   }
-  /* nur Paare behalten, die zu einer gemeinsamen Linie passen (Drift höchstens 150 ms pro Stunde, Abweichung höchstens 100 ms) */
+  /* 9.3: Rhythmus der Brustklopfer am Fuß wiederfinden, um jede Live-Stelle und in 90 s nach jeder Aufforderung zum Klopfen. Hat Vorrang. */
+  if (A && F) {
+    const rh = [], seen = [];
+    const tryG = G => { if (seen.some(t => Math.abs(t - G[0]) < 5000)) return; const r = rhythmMatch(G, F); if (r) { seen.push(G[0]); rh.push(r); } };
+    (hints || []).forEach(h => chestGroups(A, h - 8000, h + 4000).forEach(tryG));
+    (reqs || []).forEach(q => chestGroups(A, q - 2000, q + 90000).forEach(tryG));
+    if (rh.length) { pairs.length = 0; pairs.push(...rh.sort((a, b) => a.t - b.t)); }
+  }
+  /* nur Paare behalten, die zu einer gemeinsamen Linie passen (Drift höchstens 150 ms pro Stunde, Abweichung höchstens 40 ms) */
   if (pairs.length >= 2) {
     let best = [pairs.reduce((a, b) => (b.r > a.r ? b : a))];
     for (const p of pairs) for (const q of pairs) { if (q.t <= p.t) continue; const k = (q.off - p.off) / (q.t - p.t); if (Math.abs(k * 3600000) > 150) continue;
-      const inl = pairs.filter(x => Math.abs(x.off - (p.off + k * (x.t - p.t))) <= 100); if (inl.length > best.length) best = inl; }
+      const inl = pairs.filter(x => Math.abs(x.off - (p.off + k * (x.t - p.t))) <= 40); if (inl.length > best.length) best = inl; }
     if (best.length < pairs.length) { pairs.length = 0; pairs.push(...best); }
   }
   let fn = () => 0, drift = null;
@@ -2376,13 +2588,15 @@ async function buildSpar(D, stamp8) {
   /* Abgleich mit allen Sense-Daten, egal ob am Fuß oder am Arm getragen: es ist dieselbe Uhr */
   const SA = FA && FA.length ? expand(FA, offs, "f", 3, p => p.r === 52 ? 4.096 : 1) : F;
   const hints = L.filter(r => r.typ === "Abgleich" && /erkannt/.test(r.name)).map(r => r.start);
-  const sync = A && SA ? tapSync(A, SA, hints) : { gc: [], gf: [], pairs: [], fn: () => 0, drift: null };
+  const reqs = L.filter(r => r.typ === "Abgleich" && /offen/.test(r.name)).map(r => r.start);
+  const sync = A && SA ? tapSync(A, SA, hints, reqs) : { gc: [], gf: [], pairs: [], fn: () => 0, drift: null };
   if (sync.pairs.length) { if (F) for (let i = 0; i < F.t.length; i++) F.t[i] += sync.fn(F.t[i]); if (G) for (let i = 0; i < G.t.length; i++) G.t[i] += sync.fn(G.t[i]); }
   say2("Rechne: Herzschläge und EKG …"); await wait(20);
   const B = BT.map(b => ({ t: b[0], rr: b[1] })).sort((a, b) => a.t - b.t).filter((b, i, a) => !i || b.t - a[i - 1].t > 200);
   const R = E ? rPeaks(E) : [];
   const al = alignBeats(B, R);
   B.forEach((b, i) => { b.tt = al.out[i].t; b.ok = al.out[i].ok; });
+  { const eb = ekgBeats(B, R); if (eb) { let m = 0; eb.beats.forEach((x, i) => { if (x.ok || !B[i].ok) { B[i].tt = x.tt; B[i].ok = x.ok; } if (B[i].ok) m++; }); al.ekgSchlaege = m; } }
   for (let i = 0; i < B.length; i++) { const p = B[i - 1], b = B[i]; b.rre = p && p.ok && b.ok && b.tt - p.tt < 2500 ? Math.round(b.tt - p.tt) : null; }
   const T0 = Math.min(...[B[0]?.tt, A?.t[0], F?.t[0], L.length ? Math.min(...L.map(r => r.start)) : undefined].filter(Number.isFinite));
   say2("Rechne: Schritte …"); await wait(20);
@@ -2450,7 +2664,7 @@ async function buildSpar(D, stamp8) {
   const nR = steps.filter(s => s.side === "R" && s.sicher).length, nL = steps.filter(s => s.side === "L" && s.sicher).length;
   const gyInfo = GY.length ? `${GY.length} Pakete, Format ${GY[0].ft}, Faktor ${GY[0].fo ?? "keiner"}` : "keine";
   const KG = L.filter(r => r.typ === "Gewicht").map(r => parseFloat(r.name.replace(",", "."))).filter(Number.isFinite), KGv = KG.length ? KG[KG.length - 1] : null;
-  const KR = [["Feld", "Wert"], ["Version", "Messplayer 9.2"], ["Gewicht_kg", KGv], ["Datei", stamp8], ["Beginn", dstamp(new Date(T0)) + " " + tx(T0)], ["T0_Epoch_ms", Math.round(T0)],
+  const KR = [["Feld", "Wert"], ["Version", "Messplayer 9.3"], ["Gewicht_kg", KGv], ["Datei", stamp8], ["Beginn", dstamp(new Date(T0)) + " " + tx(T0)], ["T0_Epoch_ms", Math.round(T0)],
     ["BigData", $("bigdata").checked ? "an" : "aus"], ["Herzschläge", B.length], ["davon im EKG bestätigt", R.length ? al.ok : "kein EKG"],
     ["Versatz Herzschlag-Zeit zu EKG ms", al.lag], ["Klopfgruppen Brust", sync.gc.length], ["Klopfgruppen Sense", sync.gf.length],
     ["Abgleich Sense zu Brust ms", sync.pairs.length ? sync.pairs.map(p => `${tx(p.t)}: ${Math.round(p.off)} (${p.n === "live" ? "Stelle aus der Live-Erkennung" : p.n + " Klopfer"}, Ähnlichkeit ${Math.round(p.r * 100) / 100})`).join(" | ") : "kein Abgleich gefunden"],
@@ -2483,9 +2697,13 @@ async function buildSpar(D, stamp8) {
     const a2 = a, b2 = g[g.length - 1] + 2000;
     fen.push({ art, start_ms: Math.round(a2 - T0), ende_ms: Math.round(b2 - T0), spitzen_ms: g.map(x => Math.round((x - T0) * 10) / 10), brust: cut(A, a2, b2, 3), fuss: cut(F, a2, b2, 3), drehrate: cut(G, a2, b2, 3), ekg: cut(E, a2, b2, 1) });
   });
-  const json = JSON.stringify({ version: "Messplayer 9.2", gewicht_kg: KGv, t0_epoch_ms: Math.round(T0), beginn: dstamp(new Date(T0)) + " " + tx(T0), zeit: "Millisekunden seit t0, Fuß und Drehrate auf Brustuhr korrigiert",
+
+  /* 9.3: Rohfenster nach jeder Aufforderung zum Klopfen (60 s), auch ohne Erkennung, damit Fehlschläge prüfbar sind */
+  L.filter(r => r.typ === "Abgleich" && /offen/.test(r.name)).forEach(r => { const a2 = r.start, b2 = r.start + 60000;
+    fen.push({ art: "Klopfaufforderung " + r.name.replace("Abgleich offen: ", ""), start_ms: Math.round(a2 - T0), ende_ms: Math.round(b2 - T0), spitzen_ms: [], brust: cut(A, a2, b2, 3), fuss: cut(SA, a2, b2, 3) }); });
+  const json = JSON.stringify({ version: "Messplayer 9.3", gewicht_kg: KGv, t0_epoch_ms: Math.round(T0), beginn: dstamp(new Date(T0)) + " " + tx(T0), zeit: "Millisekunden seit t0, Fuß und Drehrate auf Brustuhr korrigiert",
     einheiten: { brust: "mg", fuss: "mg", drehrate: "Grad pro Sekunde", ekg: "Mikrovolt" },
-    abgleich: { methode: "Korrelation der Klopfspuren, Fuß plus Versatz = Brust", paare: sync.pairs.map(p => ({ t_ms: Math.round(p.t - T0), versatz_ms: p.off, aehnlichkeit: Math.round(p.r * 100) / 100, klopfer: p.n })), drift_ms_pro_h: sync.drift },
+    abgleich: { methode: "Korrelation der Klopfspuren, Fuß plus Versatz = Brust", paare: sync.pairs.map(p => ({ t_ms: Math.round(p.t - T0), versatz_ms: p.off, aehnlichkeit: Math.round(p.r * 100) / 100, klopfer: p.n, verfahren: p.art || "Korrelation", streuung_ms: p.streu ?? null, treffer: p.treffer ?? null })), drift_ms_pro_h: sync.drift },
     herzschlag_ekg_versatz_ms: al.lag, fenster: fen,
     nacht: NE ? Object.assign(nightJson(NE, null, null, null, E, R, T0), { hinweis: "Fenster 15 s vor bis 35 s nach jedem Ereignis mit EKG und R-Zacken. Brust und Fuß stehen im 10-Hz-Strom.", ereignisse: NE.ev.map(e => ({ nr: e.nr, art: e.art, t_ms: Math.round(e.t - T0), spitze_ms: e.tPk ? Math.round(e.tPk - T0) : null, fuss_mg: e.fuss ?? null, brust_mg: e.brust ?? null, puls_vorher: e.base ?? null, puls_spitze: e.pv ?? null, spitze_bei_schlag: e.pk ?? null, puls_tief: e.tv ?? null, fenster: e.fenster ?? null })) }) : null,
     ...X9.json9 });
@@ -2784,8 +3002,8 @@ function report9(S) {
     .text(40, 782, `Aufzeichnung ${new Date(T0).toLocaleDateString("de-DE")} von ${hr(T0)} bis ${hr(T1)} Uhr, ${Math.round(span / 60000)} Minuten.`, 10);
   const g = stats.ganz; let y = 762;
   [`Puls im Mittel ${f0(g.puls)} Schläge pro Minute (5 bis 95 Prozent: ${f0(g.p5)} bis ${f0(g.p95)}), RMSSD ${f0(g.rmssd)} ms.`,
-   g.atem ? `Atemzug im Median ${f1(g.atem)} s, das sind etwa ${f1(60 / g.atem)} Züge pro Minute.` : "Keine Atemzüge erkannt.",
-   g.temp !== null ? `Temperatur ${f1(g.tmin)} bis ${f1(g.tmax)} °C, WBGT geschätzt ${f1(g.wmin)} bis ${f1(g.wmax)}.` : "Keine Temperaturwerte.",
+   g.atem ? `Atemzug im Median ${f1(g.atem)} s, das sind etwa ${f1(60 / g.atem)} Züge pro Minute.` : g.atemGehen ? "Atem beim Gehen nicht verlässlich erkennbar, daher nicht angegeben." : "Keine Atemzüge erkannt.",
+   g.temp !== null ? `Temperatur ${f1(g.tmin)} bis ${f1(g.tmax)} °C` + (Number.isFinite(g.wmin) ? `, WBGT geschätzt ${f1(g.wmin)} bis ${f1(g.wmax)}.` : ".") : "Keine Temperaturwerte.",
    `Bewegung Brust im Mittel ${f1(g.cmad)} mg, Fuß ${f1(g.fmad)} mg (MAD je 5 s).`].forEach(s => { d.col(40, 40, 40, true).text(40, y, s, 9.5); y -= 14; });
   y -= 10; d.col(20, 20, 20, true).text(40, y, "Abschnitte (automatisch erkannt, mindestens 20 Minuten; Handeinträge stehen im Protokoll)", 10, true); y -= 16;
   const cols = [[40, "Tätigkeit"], [150, "Zeit"], [220, "Dauer"], [258, "Puls"], [290, "Min–Max"], [338, "RMSSD"], [378, "Atem s"], [418, "Brust"], [452, "Fuß"], [482, "Temp"], [516, "WBGT"], [550, "sicher"]];
@@ -2798,10 +3016,10 @@ function report9(S) {
   y -= 8; if (klima.length) { d.col(20, 20, 20, true).text(40, y, "Thermometer", 10, true); y -= 14;
     const src = [...new Set(klima.map(k => k.q))];
     src.forEach(q => { const K = klima.filter(k => k.q === q), cs = K.map(k => k.c).filter(Number.isFinite), ws = K.map(k => k.w).filter(Number.isFinite), hs = K.map(k => k.h).filter(Number.isFinite);
-      d.col(40, 40, 40, true).text(40, y, `${q}: ${K.length} Werte, ${f1(Math.min(...cs))} bis ${f1(Math.max(...cs))} °C, Luftfeuchte ${f0(Math.min(...hs))} bis ${f0(Math.max(...hs))} %, WBGT geschätzt ${f1(Math.min(...ws))} bis ${f1(Math.max(...ws))}`, 8.5); y -= 12; }); }
+      d.col(40, 40, 40, true).text(40, y, `${q}: ${K.length} Werte, ${f1(Math.min(...cs))} bis ${f1(Math.max(...cs))} °C, Luftfeuchte ${f0(Math.min(...hs))} bis ${f0(Math.max(...hs))} %` + (ws.length ? `, WBGT geschätzt ${f1(Math.min(...ws))} bis ${f1(Math.max(...ws))}` : (/Haut/.test(q) ? " (am Körper, Hauttemperatur, keine WBGT)" : "")), 8.5); y -= 12; }); }
   d.col(120, 120, 120, true).text(40, 60, "WBGT geschätzt aus Temperatur und Luftfeuchte (Feuchttemperatur nach Stull, Kugeltemperatur gleich Thermometer), etwa ±2 Punkte.", 7)
     .text(40, 50, "Puls Min–Max: 5 bis 95 Prozent der Schläge. RMSSD aus allen plausiblen Abständen. Plausibel: im EKG bestätigt oder kein einzelner Ausreißer. Bewegung: mittlere Abweichung des Beschleunigungsbetrags je 5 s.", 7)
-    .text(40, 40, "Messplayer 9.2. Uhrzeiten in Ortszeit.", 7);
+    .text(40, 40, "Messplayer 9.3. Uhrzeiten in Ortszeit.", 7);
   /* Seite 2: Verläufe */
   d.page().col(20, 20, 20, true).text(40, 800, "Verlauf", 16, true);
   const L = 70, Wd = 490;
@@ -2834,6 +3052,25 @@ function report9(S) {
     const c = pdfChart(d, { x: L, y: K0 ? 70 : 120, w: Wd, h: K0 ? 100 : 150 }, { title: "Bewegung je Minute (MAD, mg): Brust dunkel, Fuß hell", xr: [T0, T1], yr: [0, hi], xt, xf: hr, yt: [0, hi / 2, hi] });
     d.lw(1).col(150, 200, 175, false).poly(M.filter(m => Number.isFinite(m.fmad)).map(m => [c.X(m.t + 30000), c.Y(m.fmad)]));
     d.lw(1.2).col(...grey.map(v => v - 80), false).poly(M.map(m => [c.X(m.t + 30000), c.Y(m.cmad)])); }
+
+  /* 9.3: Seite 3, Höhe aus dem Luftdruck des Ruuvi, wenn sie sich um mindestens 3 m ändert */
+  { const H = klima.filter(k => /^Ruuvi/.test(k.q) && Number.isFinite(k.hm) && k.t >= T0 - 60000 && k.t <= T1 + 60000).sort((a, b) => a.t - b.t);
+    const hv = H.map(k => k.hm);
+    if (H.length > 3 && Math.max(...hv) - Math.min(...hv) >= 3) {
+      d.page().col(20, 20, 20, true).text(40, 800, "Höhe und Puls", 16, true);
+      d.col(90, 90, 90, true).text(40, 784, "Höhe gegenüber dem Beginn aus dem Luftdruck des Ruuvi (8,4 m je hPa, Mittel je Minute). Wetteränderungen über Stunden verschieben sie langsam.", 7.5);
+      const P = minutes.filter(m => Number.isFinite(m.puls));
+      { const vs = P.map(m => m.puls), lo = Math.floor((Math.min(...vs, 60) - 5) / 10) * 10, hi = Math.ceil((Math.max(...vs, 100) + 5) / 10) * 10, yt = []; for (let v = lo; v <= hi; v += hi - lo > 80 ? 20 : 10) yt.push(v);
+        const c = pdfChart(d, { x: L, y: 520, w: Wd, h: 220 }, { title: "Puls je Minute", xr: [T0, T1], yr: [lo, hi], xt, xf: hr, yt });
+        let seg = []; const fl = () => { if (seg.length > 1) d.lw(1.2).col(...blue, false).poly(seg); seg = []; };
+        P.forEach((m, i) => { if (i && m.t - P[i - 1].t > 120000) fl(); seg.push([c.X(m.t + 30000), c.Y(m.puls)]); }); fl(); }
+      { const lo = Math.floor(Math.min(...hv) / 5) * 5 - 5, hi = Math.ceil(Math.max(...hv) / 5) * 5 + 5, st = hi - lo > 60 ? 20 : hi - lo > 30 ? 10 : 5, yt = []; for (let v = lo; v <= hi; v += st) yt.push(v);
+        const c = pdfChart(d, { x: L, y: 240, w: Wd, h: 220 }, { title: "Höhe gegenüber dem Beginn, m", xr: [T0, T1], yr: [lo, hi], xt, xf: hr, yt });
+        d.lw(1.4).col(...green, false).poly(H.map(k => [c.X(Math.max(T0, Math.min(T1, k.t))), c.Y(k.hm)])); }
+      let yy = 200; d.col(20, 20, 20, true).text(40, yy, "Höhenmeter je Abschnitt", 10, true); yy -= 14;
+      (blocks.length ? blocks : [{ name: "ganze Aufzeichnung", a: T0, b: T1 }]).forEach(b => { const Q = H.filter(k => k.t >= b.a && k.t < b.b); let up = 0, dn = 0; for (let i = 1; i < Q.length; i++) { const x = Q[i].hm - Q[i - 1].hm; if (x > 0) up += x; else dn -= x; }
+        if (Q.length > 1) { d.col(40, 40, 40, true).text(40, yy, `${b.name} ${hr(b.a)}–${hr(b.b)}: ${f0(up)} m hinauf, ${f0(dn)} m hinunter`, 8.5); yy -= 12; } });
+    } }
   return d.bytes();
 }
 
@@ -2847,7 +3084,9 @@ async function extras9(X) {
   const klima = [];
   TPs.forEach(r => { if (Number.isFinite(r.c) && Number.isFinite(r.h)) klima.push({ t: r.t, q: "Thermometer " + (r.n || 1), c: r.c, h: r.h, tw: stullTw(r.c, r.h), w: wbgtEst(r.c, r.h), p: null }); });
   { const byMin = new Map(); RU.forEach(r => { if (!Number.isFinite(r.c)) return; const k = Math.floor(r.t / 60000); const a = byMin.get(k) || { n: 0, c: 0, h: 0, p: 0, hn: 0, pn: 0 }; a.n++; a.c += r.c; if (Number.isFinite(r.h)) { a.h += r.h; a.hn++; } if (Number.isFinite(r.p)) { a.p += r.p; a.pn++; } byMin.set(k, a); });
-    [...byMin.entries()].sort((a, b) => a[0] - b[0]).forEach(([k, a]) => { const c = a.c / a.n, h = a.hn ? a.h / a.hn : null; klima.push({ t: k * 60000 + 30000, q: "Ruuvi", c, h, tw: h !== null ? stullTw(c, h) : null, w: h !== null ? wbgtEst(c, h) : null, p: a.pn ? a.p / a.pn : null }); }); }
+    const ruO = (ev.filter(r => r.typ === "Trageort Ruuvi").pop() || {}).name || "Raum", ruBody = /Körper/.test(ruO); let p0 = null;
+    [...byMin.entries()].sort((a, b) => a[0] - b[0]).forEach(([k, a]) => { const c = a.c / a.n, h = a.hn ? a.h / a.hn : null, p = a.pn ? a.p / a.pn : null; if (p0 === null && p !== null) p0 = p;
+      klima.push({ t: k * 60000 + 30000, q: ruBody ? "Ruuvi Haut" : "Ruuvi", c, h, tw: h !== null && !ruBody ? stullTw(c, h) : null, w: h !== null && !ruBody ? wbgtEst(c, h) : null, p, hm: p !== null && p0 !== null ? (p0 - p) * 8.4 : null }); }); }
   klima.sort((a, b) => a.q < b.q ? -1 : a.q > b.q ? 1 : a.t - b.t);
   const mf = minuteFeatures(A, F, G, steps, T0, T1);
   const music = ev.filter(r => r.typ === "Stück");
@@ -2873,8 +3112,9 @@ async function extras9(X) {
       temp: avg(K.map(k => k.c)), wbgt: avg(K.map(k => k.w)), tmin: KA.length ? Math.min(...KA.map(k => k.c)) : null, tmax: KA.length ? Math.max(...KA.map(k => k.c)) : null,
       wmin: KA.filter(k => Number.isFinite(k.w)).length ? Math.min(...KA.filter(k => Number.isFinite(k.w)).map(k => k.w)) : null, wmax: KA.filter(k => Number.isFinite(k.w)).length ? Math.max(...KA.filter(k => Number.isFinite(k.w)).map(k => k.w)) : null };
   };
-  act.blocks.forEach(b => b.st = statsOf(b.a, b.b));
+  act.blocks.forEach(b => { b.st = statsOf(b.a, b.b); if (/Gehen|Laufen|Joggen/.test(b.name)) { b.st.atem = null; b.st.atemGehen = true; } });
   const ganz = statsOf(T0, T1 + 1);
+  { const g = act.blocks.filter(b => /Gehen|Laufen|Joggen/.test(b.name)).reduce((s, b) => s + (b.b - b.a), 0); if (g > 0.5 * (T1 - T0)) { ganz.atem = null; ganz.atemGehen = true; } }
   /* Excel-Blätter mit Diagrammen */
   const PD = [["Minute", "Uhrzeit", "Puls", "Puls_min_10s", "Puls_max_10s", "Taetigkeit_auto", "Epoch_ms"]];
   for (let i = 0; i < env.t.length; i++) if (env.ok[i]) PD.push([mi(env.t[i]), tx(env.t[i]), Math.round(env.p[i] * 10) / 10, Number.isFinite(env.lo[i]) ? Math.round(env.lo[i] * 10) / 10 : null, Number.isFinite(env.hi[i]) ? Math.round(env.hi[i] * 10) / 10 : null, actAt(env.t[i]), Math.round(env.t[i])]);
@@ -2884,8 +3124,8 @@ async function extras9(X) {
     series: [{ name: "Puls", sheet: "Puls_Diagramm", x: "A", y: "C", r1: 2, r2: n, color: "2A78D6", marker: true, size: 2 },
       { name: "kleinster in 10 s", sheet: "Puls_Diagramm", x: "A", y: "D", r1: 2, r2: n, color: "9AA3AD", line: true, width: 0.75 },
       { name: "größter in 10 s", sheet: "Puls_Diagramm", x: "A", y: "E", r1: 2, r2: n, color: "EB6834", line: true, width: 0.75 }] };
-  const KD = [["Minute", "Uhrzeit", "Quelle", "Temperatur_C", "Luftfeuchte_Prozent", "Feuchttemperatur_C", "WBGT_geschaetzt_C", "Luftdruck_hPa", "Epoch_ms"]];
-  klima.forEach(k => KD.push([mi(k.t), tx(k.t), k.q, Math.round(k.c * 100) / 100, k.h === null ? null : Math.round(k.h * 10) / 10, k.tw === null ? null : Math.round(k.tw * 10) / 10, k.w === null ? null : Math.round(k.w * 10) / 10, k.p === null ? null : Math.round(k.p * 10) / 10, Math.round(k.t)]));
+  const KD = [["Minute", "Uhrzeit", "Quelle", "Temperatur_C", "Luftfeuchte_Prozent", "Feuchttemperatur_C", "WBGT_geschaetzt_C", "Luftdruck_hPa", "Hoehe_rel_m", "Epoch_ms"]];
+  klima.forEach(k => KD.push([mi(k.t), tx(k.t), k.q, Math.round(k.c * 100) / 100, k.h === null ? null : Math.round(k.h * 10) / 10, k.tw === null ? null : Math.round(k.tw * 10) / 10, k.w === null ? null : Math.round(k.w * 10) / 10, k.p === null ? null : Math.round(k.p * 10) / 10, Number.isFinite(k.hm) ? Math.round(k.hm * 10) / 10 : null, Math.round(k.t)]));
   const kser = [], kcol = ["EB6834", "8A4FD0", "1BAA7A", "2A78D6"]; let r0 = 2;
   [...new Set(klima.map(k => k.q))].forEach((q, i) => { const m = klima.filter(k => k.q === q).length;
     kser.push({ name: q + " Temperatur", sheet: "Klima", x: "A", y: "D", r1: r0, r2: r0 + m - 1, color: kcol[i % 4], line: true, width: 1.75, marker: m < 40, size: 3 });
@@ -2913,8 +3153,8 @@ async function extras9(X) {
     schlaege: { hinweis: "t in ms seit t0 (R-Zacke, wenn EKG bestätigt), rr in ms, ok = im EKG bestätigt", t: B.map(b => rel(b.tt)), rr: B.map(b => b.rr), ok: B.map(b => b.ok ? 1 : 0) },
     atem: breaths.map(c => ({ t: rel(c.t), dauer: c.dauer, ein: c.ein, aus: c.aus, quelle: c.quelle, sicher: !!c.sicher })),
     schritte: steps.map(s => ({ t: rel(s.t), seite: s.side, sicher: !!s.sicher })),
-    klima: klima.map(k => ({ t: rel(k.t), quelle: k.q, c: Math.round(k.c * 100) / 100, h: k.h === null ? null : Math.round(k.h * 10) / 10, wbgt: k.w === null ? null : Math.round(k.w * 10) / 10, p: k.p === null ? null : Math.round(k.p * 10) / 10 })),
-    protokoll: ev.filter(r => ["Stück", "Tätigkeit", "Marker", "Notiz", "Testabschnitt", "Abgleich", "Akku", "Einschlafen", "Atemhilfe", "Gefühl", "Gewicht", "Trageort", "Bildschirm"].includes(r.typ)).map(r => ({ t: rel(r.start), ende: r.end ? rel(r.end) : null, typ: r.typ, name: r.name })),
+    klima: klima.map(k => ({ t: rel(k.t), quelle: k.q, c: Math.round(k.c * 100) / 100, h: k.h === null ? null : Math.round(k.h * 10) / 10, wbgt: k.w === null ? null : Math.round(k.w * 10) / 10, p: k.p === null ? null : Math.round(k.p * 10) / 10, hoehe_m: Number.isFinite(k.hm) ? Math.round(k.hm * 10) / 10 : null })),
+    protokoll: ev.filter(r => ["Stück", "Tätigkeit", "Marker", "Notiz", "Testabschnitt", "Abgleich", "Akku", "Einschlafen", "Atemhilfe", "Gefühl", "Gewicht", "Trageort", "Trageort Ruuvi", "Uhr", "Mikrofon", "Bildschirm"].includes(r.typ)).map(r => ({ t: rel(r.start), ende: r.end ? rel(r.end) : null, typ: r.typ, name: r.name })),
     taetigkeiten_auto: act.blocks.map(b => ({ start_ms: rel(b.a), ende_ms: rel(b.b), name: b.name, sicherheit: b.sicher, grund: b.grund })),
     akku: BA.map(b => ({ t: rel(b.t), geraet: b.d, wert: b.txt })),
     strom };
@@ -3059,7 +3299,7 @@ async function buildZip() {
       const raw = sp.raw, nacht = dstamp(new Date(raw.T0));
       const rep = nightReport(raw, pid, nacht);
       { const Lg = log; const last = (typ) => { const r = Lg.filter(x => x.typ === typ); return r.length ? r[r.length - 1].name : null; };
-        rep.KR.splice(5, 0, ["Sense getragen am", last("Trageort") || "Fuß rechts"], ["Gewicht", last("Gewicht")], ["Gefühl beim Hinlegen", last("Gefühl")]); }
+        rep.KR.splice(5, 0, ["Sense getragen am", last("Trageort") || "Fuß rechts"], ["Gewicht", last("Gewicht")], ["Gefühl beim Hinlegen", (Lg.filter(x => x.typ === "Gefühl")[0] || {}).name || null], ["Gefühl am Morgen", Lg.filter(x => x.typ === "Gefühl").length > 1 ? Lg.filter(x => x.typ === "Gefühl").pop().name : null]); }
       /* Puls und Lage je Minute für den Bericht */
       const pulseMin = [], lageMin = [], byMin = new Map();
       raw.B.forEach(b => { if (b.rr > 300 && b.rr < 2000) { const k = Math.floor(b.tt / 60000); if (!byMin.has(k)) byMin.set(k, []); byMin.get(k).push(60000 / b.rr); } });
@@ -3295,7 +3535,7 @@ function nightPdf(rep, raw, pid, nacht, pulseMin, lageMin, tps) {
   return d.bytes();
 }
 
-/* ================= Nachtplayer 2.3: Auswertung neu (überschreibt lageOf, nightReport, nightPdf aus bericht.js) =================
+/* ================= Nachtplayer 2.4: Auswertung neu (überschreibt lageOf, nightReport, nightPdf aus bericht.js) =================
    Neu: Puls oben = schneller, Mittelung als Verhältnis der Mittel, Streuung (Bootstrap über Häufungen), Seitenlage links/rechts,
    Serien von Zuckungen, einzelne Zuckung gegen Serie, Atem um die Zuckung, Puls je Minute mit Spannweite, Beispielserie. */
 const SER = { min: 4, lo: 5000, hi: 90000, haeufung: 120000 };
@@ -3493,7 +3733,7 @@ function nightReport(raw, pid, startText) {
   const r1 = v => v === null || v === undefined ? null : Math.round(v * 10) / 10;
   idx.forEach((j, i) => MR.push([pid, j, tz[i] === null ? null : Math.round(tz[i]) / 1000, r1(mc && mc[i]), r1(bz && bz.lo[i]), r1(bz && bz.hi[i]), r1(cc && cc[i]), r1(bc && bc.lo[i]), r1(bc && bc.hi[i]), r1(einz && einz.c[i]), r1(seri && seri.c[i]), valid.length, einz ? einz.n : 0, seri ? seri.n : 0, ctrl.length]));
   const fci = c => c ? `[${r1(c[0])}; ${r1(c[1])}]` : "";
-  const KR = [["Feld", "Wert"], ["Proband", pid], ["Nacht", nacht], ["Beginn der Aufzeichnung", stamp(new Date(T0))], ["Version", "Nachtplayer 2.3"],
+  const KR = [["Feld", "Wert"], ["Proband", pid], ["Nacht", nacht], ["Beginn der Aufzeichnung", stamp(new Date(T0))], ["Version", "Nachtplayer 2.4"],
     ["Zuckungen gesamt", zu.length], ["gültig", valid.length], ["ausgeschlossen: weniger als 15 s Ruhe davor", why.ruhe], ["ausgeschlossen: Schritte in der Nähe", why.schritt],
     ["ausgeschlossen: Brustbewegung oder Umdrehen", why.brust], ["ausgeschlossen: Herzschläge nicht vollständig oder unplausibel im EKG", why.ekg],
     ["Häufungen (Abstand über 2 Minuten trennt)", byH.size],
@@ -3561,7 +3801,7 @@ function nightPdf(rep, raw, pid, nacht, pulseMin, lageMin, tps) {
       const c = pdfChart(d, { x: L, y: 110, w: WD, h: 110 }, { title: "Raumtemperatur (°C)", xr: [T0, t1], yr: [lo, hi], xt, xf: hr, yt: [lo, Math.round((lo + hi) / 2), hi], yf: v => String(v) });
       d.lw(1.4).col(...orange, false).poly(T.map(p => [c.X(Math.max(T0, Math.min(t1, p.t))), c.Y(p.c)])); }
     else d.col(120, 120, 120, true).text(L, 160, "Keine Temperaturwerte in dieser Nacht.", 9); }
-  foot(`Nachtplayer 2.3. Uhrzeiten in Ortszeit. Seitenlage: ${SIDE.quelle}.`);
+  foot(`Nachtplayer 2.4. Uhrzeiten in Ortszeit. Seitenlage: ${SIDE.quelle}.`);
 
   /* gemeinsame Zeichnung: Puls Schlag für Schlag auf der Zeitachse ab T0 */
   const tz = rep.tz.map(v => v === null ? null : v / 1000), ix = rep.idx.map((j, i) => i).filter(i => rep.idx[i] >= -10 && rep.idx[i] <= 12);
@@ -3684,11 +3924,12 @@ function nightPdf(rep, raw, pid, nacht, pulseMin, lageMin, tps) {
 function nightKern(rep, raw, pid, nacht, pulseMin, log) {
   const r1 = v => v === null || v === undefined || !Number.isFinite(v) ? null : Math.round(v * 10) / 10;
   const last = typ => { const r = (log || []).filter(x => x.typ === typ); return r.length ? r[r.length - 1].name : null; };
+  const first = typ => { const r = (log || []).filter(x => x.typ === typ); return r.length ? r[0].name : null; };
   const T = (rep.Rc && rep.Rc.length) ? null : null;
   const TPs = (raw.TP || []).filter(p => Number.isFinite(p.c)).map(p => p.c);
   const k = {
-    format: "Nachtkern", version: 1, player: "Nachtplayer 2.3", proband: pid, nacht, t0_epoch_ms: Math.round(raw.T0),
-    kopf: { trageort: last("Trageort") || "Fuß rechts", gewicht: last("Gewicht"), gefuehl: last("Gefühl"), seitenlage: SIDE.quelle,
+    format: "Nachtkern", version: 1, player: "Nachtplayer 2.4", proband: pid, nacht, t0_epoch_ms: Math.round(raw.T0),
+    kopf: { trageort: last("Trageort") || "Fuß rechts", gewicht: last("Gewicht"), gefuehl: first("Gefühl"), gefuehl_morgen: (log || []).filter(x => x.typ === "Gefühl").length > 1 ? last("Gefühl") : null, seitenlage: SIDE.quelle,
       temperatur_min: TPs.length ? Math.min(...TPs) : null, temperatur_max: TPs.length ? Math.max(...TPs) : null,
       zuckungen: rep.zu.length, gueltig: rep.valid.length, serien: rep.serien.length, in_serien: rep.inSer, ausgeschlossen: rep.why,
       vor: r1(rep.K.vor), spitze: r1(rep.K.spitze), tief: r1(rep.K.tief) },
@@ -3754,7 +3995,7 @@ $("tpnew").addEventListener("click", async () => {
   $("tpget").click();
 });
 
-/* ================= Nachtplayer 2.3: Trageort des Sense, Gefühl beim Hinlegen ================= */
+/* ================= Nachtplayer 2.4: Trageort des Sense, Gefühl beim Hinlegen ================= */
 try { const o = localStorage.getItem("nacht_ort"); if (o) $("nort").value = o; } catch (e) {}
 $("nort").addEventListener("change", () => { try { localStorage.setItem("nacht_ort", $("nort").value); } catch (e) {} addEntry({ typ: "Trageort", name: $("nort").value, start: Date.now() }); flush(); });
 setTimeout(() => { if (!log.some(r => r.typ === "Trageort")) addEntry({ typ: "Trageort", name: $("nort").value, start: Date.now() }); }, 1500);
